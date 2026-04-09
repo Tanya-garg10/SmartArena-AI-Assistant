@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SmartArena — AI Stadium Assistant</title>
+  <meta name="description" content="SmartArena is your intelligent real-time AI assistant for large-scale sporting venues. Navigate faster, eat smarter, and exit safely." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;700;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Animated Background -->
+  <div class="bg-orbs">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <!-- App Container -->
+  <div class="app-container">
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <div class="logo-icon">🏟️</div>
+          <div class="logo-text">
+            <span class="logo-name">SmartArena</span>
+            <span class="logo-tagline">AI Assistant</span>
+          </div>
+        </div>
+        <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle Sidebar">✕</button>
+      </div>
+
+      <!-- Live Status Panel -->
+      <div class="status-panel">
+        <!-- Map Container (Will be injected by app.js or can stay here) -->
+        <div id="map-container" class="map-container"></div>
+
+        <div class="status-header">
+          <span class="pulse-dot"></span>
+          <span>Live Stadium Status</span>
+        </div>
+
+        <div class="status-section">
+          <h3 class="status-label">🍔 Food Stalls</h3>
+          <div class="status-item" id="stall-gate1">
+            <div class="status-item-info">
+              <span class="status-item-name">Gate 1 Stall</span>
+              <span class="crowd-badge high">HIGH</span>
+            </div>
+            <div class="status-item-meta">
+              <span class="wait-time">⏱ 15 min</span>
+              <div class="crowd-bar"><div class="crowd-fill" style="width:90%; background: var(--status-high);"></div></div>
+            </div>
+          </div>
+          <div class="status-item recommended" id="stall-gate3">
+            <div class="status-item-info">
+              <span class="status-item-name">Gate 3 Stall</span>
+              <span class="crowd-badge low">LOW ✓</span>
+            </div>
+            <div class="status-item-meta">
+              <span class="wait-time">⏱ 5 min</span>
+              <div class="crowd-bar"><div class="crowd-fill" style="width:20%; background: var(--status-low);"></div></div>
+            </div>
+          </div>
+          <div class="status-item" id="stall-gate5">
+            <div class="status-item-info">
+              <span class="status-item-name">Gate 5 Stall</span>
+              <span class="crowd-badge medium">MED</span>
+            </div>
+            <div class="status-item-meta">
+              <span class="wait-time">⏱ 10 min</span>
+              <div class="crowd-bar"><div class="crowd-fill" style="width:55%; background: var(--status-medium);"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="status-section">
+          <h3 class="status-label">🚻 Washrooms</h3>
+          <div class="status-item" id="wash-gate2">
+            <div class="status-item-info">
+              <span class="status-item-name">Near Gate 2</span>
+              <span class="crowd-badge high">HIGH</span>
+            </div>
+            <div class="status-item-meta">
+              <div class="crowd-bar"><div class="crowd-fill" style="width:85%; background: var(--status-high);"></div></div>
+            </div>
+          </div>
+          <div class="status-item recommended" id="wash-gate4">
+            <div class="status-item-info">
+              <span class="status-item-name">Near Gate 4</span>
+              <span class="crowd-badge low">LOW ✓</span>
+            </div>
+            <div class="status-item-meta">
+              <div class="crowd-bar"><div class="crowd-fill" style="width:15%; background: var(--status-low);"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="status-section">
+          <h3 class="status-label">🚪 Exits</h3>
+          <div class="status-item" id="exit-a">
+            <div class="status-item-info">
+              <span class="status-item-name">Exit A</span>
+              <span class="crowd-badge high">CONGESTED</span>
+            </div>
+          </div>
+          <div class="status-item" id="exit-b">
+            <div class="status-item-info">
+              <span class="status-item-name">Exit B</span>
+              <span class="crowd-badge medium">MODERATE</span>
+            </div>
+          </div>
+          <div class="status-item recommended" id="exit-c">
+            <div class="status-item-info">
+              <span class="status-item-name">Exit C</span>
+              <span class="crowd-badge low">CLEAR ✓</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="venue-info">
+          <span class="venue-dot"></span>
+          <span>Mega Sports Arena • Live Event</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Chat Area -->
+    <main class="main-content">
+      <!-- Top Bar -->
+      <header class="topbar">
+        <button class="menu-btn" id="menuBtn" aria-label="Open Menu">☰</button>
+        <div class="topbar-title">
+          <span class="topbar-icon">🏟️</span>
+          <div>
+            <h1 class="topbar-name">SmartArena</h1>
+            <span class="topbar-status"><span class="online-dot"></span>Online & Ready</span>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button class="action-btn" id="settingsBtn" title="AI Settings">⚙️</button>
+          <button class="action-btn" id="clearBtn" title="Clear Chat">🗑️</button>
+          <button class="action-btn emergency-btn" id="emergencyBtn" title="Emergency Exit">🚨</button>
+        </div>
+      </header>
+
+      <!-- Chat Messages -->
+      <div class="chat-area" id="chatArea">
+        <!-- Welcome Message -->
+        <div class="message bot-message" id="welcomeMsg">
+          <div class="message-avatar bot-avatar">🤖</div>
+          <div class="message-body">
+            <div class="message-bubble">
+              <p>👋 Hey! I'm <strong>SmartArena</strong>, your real-time stadium AI assistant.</p>
+              <p>I can help you with <strong>food, washrooms, exits, navigation</strong> — all with live crowd data to save you time!</p>
+              <p>What do you need?</p>
+            </div>
+            <span class="message-time">Now</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="quick-actions" id="quickActions">
+        <button class="quick-btn" data-query="I want food" id="qb-food">🍔 Food</button>
+        <button class="quick-btn" data-query="Where is the nearest washroom?" id="qb-wash">🚻 Washroom</button>
+        <button class="quick-btn" data-query="Best exit right now?" id="qb-exit">🚪 Best Exit</button>
+        <button class="quick-btn" data-query="Crowd status?" id="qb-crowd">📊 Crowd Status</button>
+        <button class="quick-btn" data-query="How do I reach Gate 3?" id="qb-gate">🗺️ Navigation</button>
+      </div>
+
+      <!-- Input Area -->
+      <div class="input-area">
+        <div class="input-wrapper">
+          <textarea
+            id="userInput"
+            class="chat-input"
+            placeholder="Ask SmartArena anything…"
+            rows="1"
+            aria-label="Chat input"
+          ></textarea>
+          <button class="send-btn" id="sendBtn" aria-label="Send message">
+            <span class="send-icon">➤</span>
+          </button>
+        </div>
+        <p class="input-hint">Powered by SmartArena AI · Real-time stadium data</p>
+      </div>
+    </main>
+  </div>
+
+  <!-- Settings Modal -->
+  <div class="modal-overlay" id="settingsModal">
+    <div class="settings-modal">
+      <div class="modal-header">
+        <h2>AI Configuration</h2>
+        <button id="closeModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="groqKey">Groq API Key</label>
+          <input type="password" id="groqKey" placeholder="gsk_..." />
+          <p class="field-hint">Your key is stored locally in your browser.</p>
+        </div>
+        <div class="form-group">
+          <label for="groqModel">Model</label>
+          <select id="groqModel">
+            <option value="llama-3.3-70b-versatile">Llama 3.3 70B (Versatile)</option>
+            <option value="llama3-8b-8192">Llama 3 8B (Fast)</option>
+            <option value="mixtral-8x7b-32768">Mixtral 8x7B (Power)</option>
+          </select>
+        </div>
+        <button class="save-btn" id="saveSettings">Save Configuration</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
