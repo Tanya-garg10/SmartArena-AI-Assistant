@@ -1,6 +1,16 @@
-## 🚀 Enhanced AI Mode (Groq Integration)
+# 🏟️ SmartArena — Cloud Run Ready
 
-SmartArena now supports high-performance LLM responses via the **Groq API**.
+SmartArena is now a full-stack AI Assistant with a Python Flask backend, ready for deployment to **Google Cloud Run**.
+
+## ☁️ Deployment to Cloud Run
+1.  **Entry Point**: Ensure you configure the container to use:
+    ```bash
+    gunicorn app:app
+    ```
+2.  **Port**: The application listens on port `8080`.
+3.  **Required Files**: `app.py` and `requirements.txt` are included in the root directory.
+
+---
 
 ### How to Configure:
 1. Click the **Settings (⚙️)** icon in the top header.
