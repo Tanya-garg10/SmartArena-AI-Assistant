@@ -10,6 +10,11 @@ An intelligent, real-time assistant designed to enhance the physical experience 
 * 🚦 Crowd-aware navigation & optimization
 * ⚡ Fast, responsive, and modern UI
 
+## 🌐 Live Demo
+
+- Backend (Cloud Run): https://smartarena-ai-assistant-712996940236.europe-west1.run.app  
+- Frontend (Vercel): https://smart-arena-ai-assistant.vercel.app/
+
 ## 🚀 Enhanced AI Mode (Groq Integration)
 
 SmartArena supports high-performance LLM responses via the **Groq API**.
