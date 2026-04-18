@@ -104,6 +104,7 @@ async function fetchGroqResponse(userQuery) {
     
     YOUR MISSION:
     - Help users navigate based on the LIVE DATA provided.
+    - Reply in ${APP_LANGUAGE === 'hi' ? 'Hindi' : 'English'}.
     - Don't just give the same answer every time. Use natural, varied language.
     - If someone asks "how" vs "where" vs "I want", adjust your tone accordingly.
     - Always recommend the ONE BEST option (minimize wait/crowd).
@@ -184,6 +185,289 @@ const chatArea = document.getElementById('chatArea');
 const userInput = document.getElementById('userInput');
 const sendBtn = document.getElementById('sendBtn');
 const quickActions = document.querySelectorAll('.quick-btn');
+let liveUpdateInterval = null;
+let lastBestSnapshot = null;
+let APP_LANGUAGE = 'en';
+let VOICE_ENABLED = true;
+let speechRecognition = null;
+let isListening = false;
+let speechRetryInProgress = false;
+let micCooldownUntil = 0;
+let lastSpeechError = '';
+let lastSpeechErrorAt = 0;
+let speechNetworkErrorCount = 0;
+let voiceInputFallbackMode = false;
+let mediaRecorder = null;
+let recordedAudioChunks = [];
+let isRecordingAudio = false;
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatMessageText(text) {
+  return escapeHtml(text).replace(/\n/g, '<br>');
+}
+
+function localized(enText, hiText) {
+  return APP_LANGUAGE === 'hi' ? hiText : enText;
+}
+
+function getBrowserVoice() {
+  const synth = window.speechSynthesis;
+  if (!synth) return null;
+  const voices = synth.getVoices();
+  if (!voices.length) return null;
+
+  const preferredLang = APP_LANGUAGE === 'hi' ? 'hi' : 'en';
+  return (
+    voices.find(v => v.lang.toLowerCase().startsWith(preferredLang)) ||
+    voices.find(v => v.lang.toLowerCase().startsWith('en')) ||
+    voices[0]
+  );
+}
+
+function speakMessage(text, isBot) {
+  if (!VOICE_ENABLED || !isBot || !window.speechSynthesis) return;
+  const cleanText = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!cleanText) return;
+
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(cleanText);
+  const voice = getBrowserVoice();
+  if (voice) {
+    utterance.voice = voice;
+    utterance.lang = voice.lang;
+  } else {
+    utterance.lang = APP_LANGUAGE === 'hi' ? 'hi-IN' : 'en-US';
+  }
+  utterance.rate = 1;
+  utterance.pitch = 1;
+  window.speechSynthesis.speak(utterance);
+}
+
+function isSpeechRecognitionSupported() {
+  return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function addSpeechErrorMessage(enMsg, hiMsg) {
+  const now = Date.now();
+  const messageKey = `${enMsg}|${hiMsg}`;
+  if (lastSpeechError === messageKey && now - lastSpeechErrorAt < 3000) {
+    return;
+  }
+  lastSpeechError = messageKey;
+  lastSpeechErrorAt = now;
+  addMessage(localized(enMsg, hiMsg), true);
+}
+
+function refreshMicButtonState() {
+  if (!micBtn) return;
+  if (isRecordingAudio) {
+    micBtn.textContent = '⏺️';
+    micBtn.classList.add('mic-active');
+    micBtn.title = 'Stop Recording';
+    return;
+  }
+  if (isListening) {
+    micBtn.textContent = '🛑';
+    micBtn.classList.add('mic-active');
+    micBtn.title = 'Stop Listening';
+    return;
+  }
+  micBtn.classList.remove('mic-active');
+  if (voiceInputFallbackMode) {
+    micBtn.textContent = '🎙️';
+    micBtn.title = 'Groq voice recording mode';
+  } else {
+    micBtn.textContent = '🎤';
+    micBtn.title = 'Voice Input';
+  }
+}
+
+function activateVoiceFallbackMode() {
+  voiceInputFallbackMode = true;
+  refreshMicButtonState();
+  addSpeechErrorMessage(
+    'Voice service is unstable. Mic switched to Groq recording fallback mode.',
+    'Voice service unstable hai. Mic ko Groq recording fallback mode me switch kar diya gaya hai.'
+  );
+}
+
+function isMediaRecorderSupported() {
+  return Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+}
+
+async function transcribeAudioWithGroq(audioBlob) {
+  if (!GROQ_CONFIG.key) {
+    addMessage(
+      localized(
+        'Please add your Groq API key in settings to use voice transcription fallback.',
+        'Voice transcription fallback use karne ke liye settings me Groq API key add karein.'
+      ),
+      true
+    );
+    return;
+  }
+
+  addMessage(localized('Transcribing your voice...', 'Aapki voice transcribe ki ja rahi hai...'), true);
+  const form = new FormData();
+  form.append('file', audioBlob, 'voice-input.webm');
+  form.append('model', 'whisper-large-v3');
+  form.append('language', APP_LANGUAGE === 'hi' ? 'hi' : 'en');
+  form.append('response_format', 'json');
+
+  try {
+    const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${GROQ_CONFIG.key}`
+      },
+      body: form
+    });
+
+    if (!response.ok) throw new Error('Transcription API error');
+    const data = await response.json();
+    const transcript = String(data?.text || '').trim();
+    if (!transcript) {
+      addMessage(localized('Could not detect speech. Please try again.', 'Speech detect nahi hui. Dobara try karein.'), true);
+      return;
+    }
+    userInput.value = transcript;
+    handleInput();
+  } catch (error) {
+    addMessage(
+      localized(
+        'Transcription failed. Please check key/network and try again.',
+        'Transcription fail ho gaya. Key/network check karke dobara try karein.'
+      ),
+      true
+    );
+  }
+}
+
+async function startGroqRecording() {
+  if (!isMediaRecorderSupported()) {
+    addMessage(
+      localized(
+        'Recording fallback is not supported in this browser.',
+        'Is browser me recording fallback supported nahi hai.'
+      ),
+      true
+    );
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recordedAudioChunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) {
+        recordedAudioChunks.push(event.data);
+      }
+    };
+    mediaRecorder.onstop = async () => {
+      const blobType = mediaRecorder?.mimeType || 'audio/webm';
+      const audioBlob = new Blob(recordedAudioChunks, { type: blobType });
+      stream.getTracks().forEach(track => track.stop());
+      mediaRecorder = null;
+      isRecordingAudio = false;
+      refreshMicButtonState();
+      if (audioBlob.size > 0) {
+        await transcribeAudioWithGroq(audioBlob);
+      }
+    };
+    mediaRecorder.start();
+    isRecordingAudio = true;
+    refreshMicButtonState();
+    addMessage(localized('Recording started. Tap again to stop.', 'Recording start ho gayi. Stop karne ke liye dobara tap karein.'), true);
+  } catch (error) {
+    addMessage(
+      localized(
+        'Microphone access failed for recording fallback.',
+        'Recording fallback ke liye microphone access fail ho gaya.'
+      ),
+      true
+    );
+  }
+}
+
+function stopGroqRecording() {
+  if (mediaRecorder && isRecordingAudio) {
+    mediaRecorder.stop();
+  }
+}
+
+function initSpeechRecognition() {
+  if (!isSpeechRecognitionSupported()) return null;
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const recognition = new Recognition();
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+
+  recognition.onstart = () => {
+    isListening = true;
+    refreshMicButtonState();
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    addMessage(localized('Listening... Speak now.', 'Sun raha hoon... Ab boliye.'), true);
+  };
+
+  recognition.onresult = (event) => {
+    const transcript = event.results?.[0]?.[0]?.transcript?.trim();
+    if (!transcript) return;
+    speechNetworkErrorCount = 0;
+    userInput.value = transcript;
+    handleInput();
+  };
+
+  recognition.onerror = (event) => {
+    const errorType = event?.error || 'unknown';
+    let enMsg = 'Voice input failed. Please try again.';
+    let hiMsg = 'Voice input fail ho gaya. Dobara try karein.';
+
+    if (errorType === 'not-allowed' || errorType === 'service-not-allowed') {
+      enMsg = 'Microphone permission denied. Allow mic access in browser settings and try again.';
+      hiMsg = 'Microphone permission deny hai. Browser settings me mic access allow karke dobara try karein.';
+    } else if (errorType === 'audio-capture') {
+      enMsg = 'No microphone detected. Check your mic device and retry.';
+      hiMsg = 'Microphone detect nahi hua. Mic device check karke retry karein.';
+    } else if (errorType === 'no-speech') {
+      enMsg = 'No speech detected. Tap mic and speak clearly.';
+      hiMsg = 'Koi speech detect nahi hui. Mic dabake clearly boliye.';
+    } else if (errorType === 'network') {
+      // Prevent endless error loops by applying a short cooldown.
+      micCooldownUntil = Date.now() + 5000;
+      speechRetryInProgress = true;
+      speechNetworkErrorCount += 1;
+      enMsg = 'Voice service network error detected. Switching to Groq recording mode now.';
+      hiMsg = 'Voice service network error detect hua. Abhi Groq recording mode pe switch kar rahe hain.';
+      activateVoiceFallbackMode();
+      if (isListening) {
+        recognition.stop();
+      }
+    } else if (errorType === 'aborted') {
+      enMsg = 'Voice input stopped.';
+      hiMsg = 'Voice input stop ho gaya.';
+    }
+
+    addSpeechErrorMessage(enMsg, hiMsg);
+  };
+
+  recognition.onend = () => {
+    isListening = false;
+    refreshMicButtonState();
+  };
+
+  return recognition;
+}
 
 function addMessage(text, isBot = false, recommendation = null) {
   const msgDiv = document.createElement('div');
@@ -191,12 +475,17 @@ function addMessage(text, isBot = false, recommendation = null) {
   
   let recHtml = '';
   if (recommendation) {
+    const recommendationName = escapeHtml(recommendation.result?.name || 'Best Option');
+    const recommendationReason = formatMessageText(recommendation.reason || '');
+    const confidenceClass = escapeHtml((recommendation.confidence || 'Low').toLowerCase());
+    const confidenceLabel = escapeHtml(recommendation.confidence || 'Low');
+
     recHtml = `
       <div class="recommendation-card">
-        <strong>Best Option: ${recommendation.result.name}</strong>
-        <p style="font-size: 0.85rem; margin-top: 4px;">${recommendation.reason}</p>
-        <div class="confidence-tag conf-${recommendation.confidence.toLowerCase()}">
-          Confidence: ${recommendation.confidence}
+        <strong>Best Option: ${recommendationName}</strong>
+        <p style="font-size: 0.85rem; margin-top: 4px;">${recommendationReason}</p>
+        <div class="confidence-tag conf-${confidenceClass}">
+          Confidence: ${confidenceLabel}
         </div>
       </div>
     `;
@@ -208,7 +497,7 @@ function addMessage(text, isBot = false, recommendation = null) {
     </div>
     <div class="message-body">
       <div class="message-bubble">
-        ${text}
+        ${formatMessageText(text)}
         ${recHtml}
       </div>
       <span class="message-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
@@ -217,6 +506,7 @@ function addMessage(text, isBot = false, recommendation = null) {
   
   chatArea.appendChild(msgDiv);
   chatArea.scrollTop = chatArea.scrollHeight;
+  speakMessage(text, isBot);
 }
 
 function handleInput() {
@@ -239,7 +529,9 @@ function handleInput() {
 
   // Process Response
   setTimeout(async () => {
-    chatArea.removeChild(typingIndicator);
+    if (typingIndicator.parentNode === chatArea) {
+      chatArea.removeChild(typingIndicator);
+    }
     
     // Try Groq first
     const groqResponse = await fetchGroqResponse(text);
@@ -253,26 +545,59 @@ function handleInput() {
 }
 
 function processBotResponse(query) {
-  let response = "I'm not sure about that. Try asking about food, washrooms, or exits! 🏟️";
+  let response = localized(
+    "I'm not sure about that. Try asking about food, washrooms, or exits! 🏟️",
+    "Mujhe iske bare me pakka nahi hai. Food, washroom, ya exit ke bare me pucho! 🏟️"
+  );
   let rec = null;
 
   if (query.includes('food') || query.includes('eat') || query.includes('hungry')) {
     rec = getRecommendation('food');
-    response = `${rec.result.name} is your best option — ${rec.reason}`;
+    response = localized(
+      `${rec.result.name} is your best option — ${rec.reason}`,
+      `${rec.result.name} aapke liye best option hai — ${rec.reason}`
+    );
   } 
   else if (query.includes('washroom') || query.includes('toilet') || query.includes('restroom')) {
     rec = getRecommendation('washroom');
-    response = `The washroom ${rec.result.name} is the best choice right now.`;
+    response = localized(
+      `The washroom ${rec.result.name} is the best choice right now.`,
+      `${rec.result.name} wala washroom abhi sabse achha choice hai.`
+    );
   }
   else if (query.includes('exit') || query.includes('leave') || query.includes('out')) {
     rec = getRecommendation('exit');
-    response = `I recommend using ${rec.result.name} for the fastest exit.`;
+    response = localized(
+      `I recommend using ${rec.result.name} for the fastest exit.`,
+      `Sabse fast exit ke liye ${rec.result.name} use karein.`
+    );
   }
   else if (query.includes('crowd') || query.includes('status')) {
-    response = "The stadium is currently at 65% capacity. Gate 3 area is the least crowded! 📊";
+    response = localized(
+      "The stadium is currently at 65% capacity. Gate 3 area is the least crowded! 📊",
+      "Stadium abhi lagbhag 65% capacity par hai. Gate 3 area sabse kam crowded hai! 📊"
+    );
   }
   else if (query.includes('gate 3')) {
-    response = "To reach Gate 3: Head North from your current position, take a right at the Main Concourse. It's a 2-minute walk! 🗺️";
+    response = localized(
+      "To reach Gate 3: Head North from your current position, take a right at the Main Concourse. It's a 2-minute walk! 🗺️",
+      "Gate 3 ke liye: apni current location se North side jaiye, Main Concourse par right lijiye. Lagbhag 2 minute ka walk hai! 🗺️"
+    );
+  }
+  else if (
+    query.includes('plan my visit') ||
+    query.includes('smart plan') ||
+    query.includes('full plan') ||
+    query.includes('itinerary')
+  ) {
+    response = generateSmartVisitPlan();
+  }
+  else if (query.includes('live update') || query.includes('best now') || query.includes('current best')) {
+    const snapshot = getCurrentBestSnapshot();
+    response = localized(
+      `Live snapshot: 🍔 ${snapshot.food.name} (${snapshot.food.wait} min), 🚻 ${snapshot.washroom.name}, 🚪 ${snapshot.exit.name}.`,
+      `Live snapshot: 🍔 ${snapshot.food.name} (${snapshot.food.wait} min), 🚻 ${snapshot.washroom.name}, 🚪 ${snapshot.exit.name}.`
+    );
   }
 
   addMessage(response, true, rec);
@@ -305,14 +630,21 @@ quickActions.forEach(btn => {
 
 document.getElementById('clearBtn').addEventListener('click', () => {
   chatArea.innerHTML = '';
-  addMessage("Chat cleared. How can I help you now? 🏟️", true);
+  addMessage(localized("Chat cleared. How can I help you now? 🏟️", "Chat clear ho gaya. Ab main kaise help karun? 🏟️"), true);
 });
 
 document.getElementById('emergencyBtn').addEventListener('click', () => {
   const rec = getRecommendation('exit');
   document.body.classList.add('emergency-active');
-  addMessage("🚨 EMERGENCY PROCEDURE ACTIVATED. PLEASE CALM DOWN.", true);
-  addMessage(`FASTEST EXIT: ${rec.result.name}. Follow the illuminated green signs.`, true, rec);
+  addMessage(localized("🚨 EMERGENCY PROCEDURE ACTIVATED. PLEASE CALM DOWN.", "🚨 EMERGENCY PROCEDURE ACTIVATE HUA. KRIPYA SHAANT RAHEN."), true);
+  addMessage(
+    localized(
+      `FASTEST EXIT: ${rec.result.name}. Follow the illuminated green signs.`,
+      `SABSE FAST EXIT: ${rec.result.name}. Green emergency signs follow karein.`
+    ),
+    true,
+    rec
+  );
   
   // Reset emergency state after 10s
   setTimeout(() => {
@@ -334,6 +666,9 @@ sidebarToggle.addEventListener('click', toggleSidebar);
 
 // Settings Modal Logic
 const settingsBtn = document.getElementById('settingsBtn');
+const languageBtn = document.getElementById('languageBtn');
+const voiceBtn = document.getElementById('voiceBtn');
+const micBtn = document.getElementById('micBtn');
 const settingsModal = document.getElementById('settingsModal');
 const closeModal = document.getElementById('closeModal');
 const saveSettings = document.getElementById('saveSettings');
@@ -358,19 +693,56 @@ saveSettings.addEventListener('click', () => {
   GROQ_CONFIG.key = groqKeyInput.value.trim();
   GROQ_CONFIG.model = groqModelSelect.value;
   settingsModal.classList.remove('active');
-  addMessage("AI settings updated! I'm now powered by Groq. 🚀", true);
+  addMessage(localized("AI settings updated! I'm now powered by Groq. 🚀", "AI settings update ho gayi! Ab main Groq se powered hoon. 🚀"), true);
 });
+
+languageBtn.addEventListener('click', () => {
+  APP_LANGUAGE = APP_LANGUAGE === 'en' ? 'hi' : 'en';
+  languageBtn.textContent = APP_LANGUAGE === 'en' ? 'EN' : 'HI';
+  addMessage(localized('Language switched to English.', 'Language Hindi par switch ho gayi.'), true);
+});
+
+if (voiceBtn) {
+  voiceBtn.addEventListener('click', () => {
+    VOICE_ENABLED = !VOICE_ENABLED;
+    voiceBtn.textContent = VOICE_ENABLED ? '🔊' : '🔇';
+    if (!VOICE_ENABLED && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    addMessage(
+      localized(
+        VOICE_ENABLED ? 'Voice output is now ON.' : 'Voice output is now OFF.',
+        VOICE_ENABLED ? 'Voice output ab ON hai.' : 'Voice output ab OFF hai.'
+      ),
+      true
+    );
+  });
+}
 
 // Initialize
 window.addEventListener('load', () => {
-  // Add map container to sidebar status panel
+  // Add map container only if it does not already exist in markup.
   const statusPanel = document.querySelector('.status-panel');
-  const mapDiv = document.createElement('div');
-  mapDiv.id = 'map-container';
-  mapDiv.className = 'map-container';
-  statusPanel.insertBefore(mapDiv, statusPanel.firstChild);
+  if (statusPanel && !document.getElementById('map-container')) {
+    const mapDiv = document.createElement('div');
+    mapDiv.id = 'map-container';
+    mapDiv.className = 'map-container';
+    statusPanel.insertBefore(mapDiv, statusPanel.firstChild);
+  }
   
   initMap();
+  updateSidebarUI();
+  startLiveUpdates();
+
+  if (micBtn && !isSpeechRecognitionSupported() && !isMediaRecorderSupported()) {
+    micBtn.disabled = true;
+    micBtn.title = 'Voice input not supported';
+  }
+  refreshMicButtonState();
+
+  if (window.speechSynthesis) {
+    window.speechSynthesis.onvoiceschanged = () => {};
+  }
 });
 
 /**
@@ -407,4 +779,73 @@ function updateSidebarUI() {
       else el.classList.remove('recommended');
     }
   });
+}
+
+function getCurrentBestSnapshot() {
+  const bestFood = [...STADIUM_DATA.food].sort((a, b) => a.wait - b.wait)[0];
+  const bestWashroom = STADIUM_DATA.washrooms.find(w => w.crowd === 'Low') || STADIUM_DATA.washrooms[0];
+  const bestExit = STADIUM_DATA.exits.find(e => e.level === 'Low') || STADIUM_DATA.exits[0];
+
+  return {
+    food: { id: bestFood.id, name: bestFood.name, wait: bestFood.wait },
+    washroom: { id: bestWashroom.id, name: bestWashroom.name },
+    exit: { id: bestExit.id, name: bestExit.name }
+  };
+}
+
+function snapshotsEqual(a, b) {
+  if (!a || !b) return false;
+  return a.food.id === b.food.id && a.washroom.id === b.washroom.id && a.exit.id === b.exit.id;
+}
+
+function startLiveUpdates() {
+  if (liveUpdateInterval) return;
+
+  lastBestSnapshot = getCurrentBestSnapshot();
+  liveUpdateInterval = setInterval(() => {
+    fluctuateData();
+    initMap();
+    updateSidebarUI();
+
+    const currentSnapshot = getCurrentBestSnapshot();
+    if (!snapshotsEqual(lastBestSnapshot, currentSnapshot)) {
+      addMessage(
+        localized(
+          `🔄 Live update: Best options changed — 🍔 ${currentSnapshot.food.name} (${currentSnapshot.food.wait} min), 🚻 ${currentSnapshot.washroom.name}, 🚪 ${currentSnapshot.exit.name}.`,
+          `🔄 Live update: Best options change hue — 🍔 ${currentSnapshot.food.name} (${currentSnapshot.food.wait} min), 🚻 ${currentSnapshot.washroom.name}, 🚪 ${currentSnapshot.exit.name}.`
+        ),
+        true
+      );
+      lastBestSnapshot = currentSnapshot;
+    }
+  }, 15000);
+}
+
+function generateSmartVisitPlan() {
+  const bestFood = getRecommendation('food').result;
+  const bestWashroom = getRecommendation('washroom').result;
+  const bestExit = getRecommendation('exit').result;
+
+  const avgFoodWait = STADIUM_DATA.food.reduce((sum, stall) => sum + stall.wait, 0) / STADIUM_DATA.food.length;
+  const savedMinutes = Math.max(0, Math.round(avgFoodWait - bestFood.wait));
+  const crowdMessage = bestWashroom.crowd === 'Low' ? 'minimal queue' : `${bestWashroom.crowd.toLowerCase()} queue`;
+  const exitStatus = bestExit.status.toLowerCase();
+
+  const enPlan = [
+    'Here is your SmartArena visit plan:',
+    `1) 🍔 Grab food at ${bestFood.name} (${bestFood.wait} min wait).`,
+    `2) 🚻 Use washroom at ${bestWashroom.name} (${crowdMessage}).`,
+    `3) 🚪 Leave via ${bestExit.name} (${exitStatus} route).`,
+    `Estimated benefit: about ${savedMinutes} min faster than average food queue + smoother movement.`
+  ].join('\n');
+
+  const hiPlan = [
+    'Yeh raha aapka SmartArena visit plan:',
+    `1) 🍔 ${bestFood.name} se food lein (${bestFood.wait} min wait).`,
+    `2) 🚻 ${bestWashroom.name} washroom use karein (${crowdMessage}).`,
+    `3) 🚪 ${bestExit.name} se bahar niklein (${exitStatus} route).`,
+    `Estimated benefit: average food queue se lagbhag ${savedMinutes} min faster + smoother movement.`
+  ].join('\n');
+
+  return localized(enPlan, hiPlan);
 }

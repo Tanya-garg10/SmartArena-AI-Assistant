@@ -316,6 +316,10 @@ body {
 
 .action-btn:hover { background: rgba(255, 255, 255, 0.1); }
 .emergency-btn:hover { background: var(--status-high); border-color: transparent; }
+.action-btn.mic-active {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: var(--status-high);
+}
 
 /* Chat Area */
 .chat-area {
